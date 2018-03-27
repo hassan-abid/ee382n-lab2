@@ -28,11 +28,10 @@ slvreg2 -> offset 8 reads Switches
 #define fpga_MAJOR 200
 #define MAP_SIZE 4096UL                                                                                     
 #define MAP_MASK (MAP_SIZE - 1)
-#define NUM_MEASURE 10000   
+//#define NUM_MEASURE 10000   
 
 int sigio_signal_processed = 0;
 int num_int = 0;
-unsigned long intr_latency[NUM_MEASURE];
 
 struct timeval start_timestamp, sigio_signal_timestamp;
 
@@ -58,17 +57,38 @@ void sighandler(int signo)
 
 char buffer[4096];
 
+void usage(void)
+{
+
+}
+
 int main(int argc, char **argv)
 {
-    int count,i;
+    int count,i,j;
     struct sigaction action;
     int fd;
     int rc;
     int fc;
+    int NUM_MEASURE = 10000;
+
+    unsigned long* intr_latency;
+
+    if (argc != 2)
+    {
+        usage();
+    }
+
+    sscanf(argv[1], "%d", &NUM_MEASURE);
+
+    intr_latency = (unsigned long*)malloc(NUM_MEASURE*sizeof(unsigned long));   
+    
+    
+
     // CSV file generation
-    char* filename = "interrupt_latency.csv";
+    //char* filename = "interrupt_latency.csv";
+    char* filename = argv[2];
     FILE *fpcsv;
-    fpcsv = fopen(filename, "w+");
+    fpcsv = fopen(filename, "a+");
     if (fpcsv == NULL) {
     	perror("Unable to open csv file");
     	exit (-1);
@@ -118,69 +138,83 @@ int main(int argc, char **argv)
     
     sigset_t signal_mask, signal_mask_old, signal_mask_most;
     
-
+    unsigned long min_lat, max_lat, avg_lat, st_dev;
 /*   This while loop emulates a program running the main
 *   loop i.e. sleep(). The main loop is interrupted when
 *   the SIGIO signal is received.
 */
-
-    for(i = 0; i < NUM_MEASURE; i++)
+    for(j = 0; j < 1; j++)
     {
+        for(i = 0; i < NUM_MEASURE; i++)
+        {
 
-	    sigio_signal_processed = 0;
+    	    sigio_signal_processed = 0;
 
-	    (void)sigfillset(&signal_mask);
-	    (void)sigfillset(&signal_mask_most);
-	    (void)sigdelset(&signal_mask_most, SIGIO);
-	    (void)sigprocmask(SIG_SETMASK,&signal_mask, &signal_mask_old);
+    	    (void)sigfillset(&signal_mask);
+    	    (void)sigfillset(&signal_mask_most);
+    	    (void)sigdelset(&signal_mask_most, SIGIO);
+    	    (void)sigprocmask(SIG_SETMASK,&signal_mask, &signal_mask_old);
 
-	    (void)gettimeofday(&start_timestamp, NULL);
-	    //set pin to high to trigger interrupt
-	    pm(GPIO,0x01);
-	    //(void)gettimeofday(&start_timestamp, NULL);
+    	    (void)gettimeofday(&start_timestamp, NULL);
+    	    //set pin to high to trigger interrupt
+    	    pm(GPIO,0x01);
+    	    //(void)gettimeofday(&start_timestamp, NULL);
 
-	    if (sigio_signal_processed == 0) {
-	        rc = sigsuspend(&signal_mask_most);
-	        /* Confirm we are coming out of suspend mode correcly */
-	        assert(rc == -1 && errno == EINTR && sigio_signal_processed);
-	    }
+    	    if (sigio_signal_processed == 0) {
+    	        rc = sigsuspend(&signal_mask_most);
+    	        /* Confirm we are coming out of suspend mode correcly */
+    	        assert(rc == -1 && errno == EINTR && sigio_signal_processed);
+    	    }
 
-	    (void)sigprocmask(SIG_SETMASK, &signal_mask_old, NULL);
-	    assert(num_int == i + 1); // Critical assertion!!
-	    
-	    intr_latency[i] = (sigio_signal_timestamp.tv_sec - start_timestamp.tv_sec) * 1000000 + (sigio_signal_timestamp.tv_usec - start_timestamp.tv_usec);
-	    //printf("latency : %lu\n", intr_latency);
-	}
+    	    (void)sigprocmask(SIG_SETMASK, &signal_mask_old, NULL);
+    	    assert(num_int == i + 1); // Critical assertion!!
+    	    
+    	    intr_latency[i] = (sigio_signal_timestamp.tv_sec - start_timestamp.tv_sec) * 1000000 + (sigio_signal_timestamp.tv_usec - start_timestamp.tv_usec);
+    	    //printf("latency : %lu\n", intr_latency);
+    	}
+        num_int = 0;
+
+    // Calculation
+        min_lat=intr_latency[0];
+        max_lat=intr_latency[0];
+        avg_lat=0;
+        st_dev=0;
+
+
+        for(i = 0; i < NUM_MEASURE; i++)
+        {
+        	if(intr_latency[i] < min_lat)
+        		min_lat = intr_latency[i];
+
+        	if(intr_latency[i] > max_lat)
+        		max_lat = intr_latency[i];
+
+        	avg_lat += intr_latency[i];
+        }
+        avg_lat = avg_lat/NUM_MEASURE;
+
+        for(i = 0; i < NUM_MEASURE; i++)
+        {
+        	fprintf(fpcsv, "%lu", intr_latency[i]);
+            if (i < NUM_MEASURE - 1)
+                fprintf(fpcsv, ",");
+            else
+                fprintf(fpcsv, "\r\n");
+
+        	st_dev += (intr_latency[i]-avg_lat)*(intr_latency[i]-avg_lat);
+        }
+        st_dev = st_dev/NUM_MEASURE;
+
+        printf("Minimum Latency:\t%lu\n", min_lat);
+        printf("Maximum Latency:\t%lu\n", max_lat);
+        printf("Average Latency:\t%lu\n", avg_lat);
+        printf("Variance:\t\t%lu\n", st_dev);
+        printf("Number of Samples:\t%d\n", NUM_MEASURE);
+
+        i = system("more /proc/interrupts | grep interrupt_arm");
+
+    }
     close(fd);
-
-// Calculation
-    unsigned long min_lat=intr_latency[0], max_lat=intr_latency[0], avg_lat=0, st_dev=0;
-
-    for(i = 0; i < NUM_MEASURE; i++)
-    {
-    	if(intr_latency[i] < min_lat)
-    		min_lat = intr_latency[i];
-
-    	if(intr_latency[i] > max_lat)
-    		max_lat = intr_latency[i];
-
-    	avg_lat += intr_latency[i];
-    }
-    avg_lat = avg_lat/NUM_MEASURE;
-
-    for(i = 0; i < NUM_MEASURE; i++)
-    {
-    	fprintf(fpcsv, "%lu\n", intr_latency[i]);
-    	st_dev += (intr_latency[i]-avg_lat)*(intr_latency[i]-avg_lat);
-    }
-    st_dev = st_dev/NUM_MEASURE;
     fclose(fpcsv);
-
-    printf("Minimum Latency:\t%lu\n", min_lat);
-    printf("Maximum Latency:\t%lu\n", max_lat);
-    printf("Average Latency:\t%lu\n", avg_lat);
-    printf("Variance:\t\t%lu\n", st_dev);
-    printf("Number of Samples:\t%d\n", NUM_MEASURE);
-
-    i = system("more /proc/interrupts | grep 164");
+    free(intr_latency);
 }

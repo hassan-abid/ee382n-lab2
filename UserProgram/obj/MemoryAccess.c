@@ -88,6 +88,6 @@ uint32_t  pm(uint32_t target_addr, uint32_t value){
 	}	
 
 	munmap(NULL, MAP_SIZE);
-	
+	return 0;
 	
 }
